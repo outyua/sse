@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -45,26 +46,25 @@ type Client struct {
 	disconnectcb      ConnCallback
 	connectedcb       ConnCallback
 	subscribed        map[chan *Event]chan struct{}
-	Headers           map[string]string
 	ReconnectNotify   backoff.Notify
 	ResponseValidator ResponseValidator
 	Connection        *http.Client
-	URL               string
 	LastEventID       atomic.Value // []byte
 	maxBufferSize     int
 	mu                sync.Mutex
 	EncodingBase64    bool
 	Connected         bool
+	Request           *http.Request
 }
 
 // NewClient creates a new client
 func NewClient(url string, opts ...func(c *Client)) *Client {
+	request, _ := http.NewRequest(http.MethodGet, url, nil)
 	c := &Client{
-		URL:           url,
 		Connection:    &http.Client{},
-		Headers:       make(map[string]string),
 		subscribed:    make(map[chan *Event]chan struct{}),
 		maxBufferSize: 1 << 16,
+		Request:       request,
 	}
 
 	for _, opt := range opts {
@@ -77,6 +77,24 @@ func NewClient(url string, opts ...func(c *Client)) *Client {
 // Subscribe to a data stream
 func (c *Client) Subscribe(stream string, handler func(msg *Event)) error {
 	return c.SubscribeWithContext(context.Background(), stream, handler)
+}
+
+func (c *Client) WithHeaders(headers map[string]string) *Client {
+	for k, v := range headers {
+		c.Request.Header.Set(k, v)
+	}
+	return c
+}
+
+func (c *Client) WithMethod(method string) *Client {
+	c.Request.Method = method
+	return c
+}
+
+func (c *Client) WithBody(body interface{}) *Client {
+	data, _ := json.Marshal(body)
+	c.Request.Body = io.NopCloser(bytes.NewReader(data))
+	return c
 }
 
 // SubscribeWithContext to a data stream with context
@@ -121,20 +139,49 @@ func (c *Client) SubscribeWithContext(ctx context.Context, stream string, handle
 }
 
 // SubscribeChan sends all events to the provided channel
-func (c *Client) SubscribeChan(stream string, ch chan *Event) error {
-	return c.SubscribeChanWithContext(context.Background(), stream, ch)
+func (c *Client) SubscribeChan(stream string, ch chan *Event, opts ...EventOption) error {
+	opts = append(opts, WithStream(stream))
+	return c.SubscribeChanWithContext(context.Background(), ch, opts...)
+}
+
+// SubscribeChan sends all events to the provided channel
+func (c *Client) SubscribeChanWithEnd(stream string, ch chan *Event, onEnd func(ch chan *Event)) error {
+	return c.SubscribeChanWithContext(context.Background(), ch, WithStream(stream))
+}
+
+type EventOptions struct {
+	stream string
+	onEnd  func(ch chan *Event)
+}
+type EventOption func(*EventOptions)
+
+func WithStream(stream string) EventOption {
+	return func(o *EventOptions) {
+		o.stream = stream
+	}
+}
+
+func WithOnEnd(onEnd func(ch chan *Event)) EventOption {
+	return func(o *EventOptions) {
+		o.onEnd = onEnd
+	}
 }
 
 // SubscribeChanWithContext sends all events to the provided channel with context
-func (c *Client) SubscribeChanWithContext(ctx context.Context, stream string, ch chan *Event) error {
+func (c *Client) SubscribeChanWithContext(ctx context.Context, ch chan *Event, opts ...EventOption) error {
 	var connected bool
 	errch := make(chan error)
 	c.mu.Lock()
 	c.subscribed[ch] = make(chan struct{})
 	c.mu.Unlock()
 
+	options := &EventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	operation := func() error {
-		resp, err := c.request(ctx, stream)
+		resp, err := c.request(ctx, options.stream)
 		if err != nil {
 			return err
 		}
@@ -183,6 +230,11 @@ func (c *Client) SubscribeChanWithContext(ctx context.Context, stream string, ch
 
 	go func() {
 		defer c.cleanup(ch)
+		defer func() {
+			if options.onEnd != nil {
+				options.onEnd(ch)
+			}
+		}()
 		// Apply user specified reconnection strategy or default to standard NewExponentialBackOff() reconnection method
 		var err error
 		if c.ReconnectStrategy != nil {
@@ -265,7 +317,7 @@ func (c *Client) SubscribeChanRaw(ch chan *Event) error {
 
 // SubscribeChanRawWithContext sends all events to the provided channel with context
 func (c *Client) SubscribeChanRawWithContext(ctx context.Context, ch chan *Event) error {
-	return c.SubscribeChanWithContext(ctx, "", ch)
+	return c.SubscribeChanWithContext(ctx, ch)
 }
 
 // Unsubscribe unsubscribes a channel
@@ -289,10 +341,7 @@ func (c *Client) OnConnect(fn ConnCallback) {
 }
 
 func (c *Client) request(ctx context.Context, stream string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", c.URL, nil)
-	if err != nil {
-		return nil, err
-	}
+	req := c.Request
 	req = req.WithContext(ctx)
 
 	// Setup request, specify stream to connect to
@@ -309,11 +358,6 @@ func (c *Client) request(ctx context.Context, stream string) (*http.Response, er
 	lastID, exists := c.LastEventID.Load().([]byte)
 	if exists && lastID != nil {
 		req.Header.Set("Last-Event-ID", string(lastID))
-	}
-
-	// Add user specified headers
-	for k, v := range c.Headers {
-		req.Header.Set(k, v)
 	}
 
 	return c.Connection.Do(req)

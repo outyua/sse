@@ -8,7 +8,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"strconv"
 	"time"
 )
 
@@ -20,6 +22,28 @@ type Event struct {
 	Event     []byte
 	Retry     []byte
 	Comment   []byte
+}
+
+func (e *Event) ReadID() int64 {
+	atoi, _ := strconv.Atoi(string(e.ID))
+	return int64(atoi)
+}
+
+func (e *Event) ReadJsonData(m interface{}) {
+	json.Unmarshal(e.Data, m)
+}
+
+func (e *Event) ReadEvent() string {
+	return string(e.Event)
+}
+
+func (e *Event) ReadRetry() int64 {
+	atoi, _ := strconv.Atoi(string(e.Retry))
+	return int64(atoi)
+}
+
+func (e *Event) ReadComment() string {
+	return string(e.Comment)
 }
 
 func (e *Event) hasContent() bool {

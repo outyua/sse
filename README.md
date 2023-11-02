@@ -1,18 +1,20 @@
 # SSE - Server Sent Events Client/Server Library for Go
 
+forked from [r3labs/sse](https://github.com/r3labs/sse)
+
 ## Synopsis
 
 SSE is a client/server implementation for Server Sent Events for Golang.
 
 ## Build status
 
-* Master: [![CircleCI  Master](https://circleci.com/gh/r3labs/sse.svg?style=svg)](https://circleci.com/gh/r3labs/sse)
+* Master: [![CircleCI  Master](https://circleci.com/gh/outyua/sse.svg?style=svg)](https://circleci.com/gh/r3labs/sse)
 
 ## Quick start
 
 To install:
 ```
-go get github.com/r3labs/sse/v2
+go get github.com/outyua/sse
 ```
 
 To Test:
