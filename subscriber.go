@@ -17,7 +17,7 @@ type Subscriber struct {
 
 // Close will let the stream know that the clients connection has terminated
 func (s *Subscriber) close() {
-	s.quit <- s
+	close(s.quit)
 	if s.removed != nil {
 		<-s.removed
 	}
